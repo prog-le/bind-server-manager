@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api';
 
 const ACTION_LABELS = {
@@ -21,6 +22,9 @@ const STATUS_COLORS = {
 };
 
 export default function Dashboard() {
+  const { isAuditor } = useAuth();
+  if (isAuditor) return <Navigate to="/audit" replace />;
+
   const [stats, setStats] = useState({ zones: 0, records: 0 });
   const [bindStatus, setBindStatus] = useState(null);
   const [recentLogs, setRecentLogs] = useState([]);

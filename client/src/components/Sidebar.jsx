@@ -1,14 +1,30 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
-const navItems = [
-  { path: '/', label: '仪表盘', icon: '📊' },
-  { path: '/zones', label: 'Zone 管理', icon: '🌐' },
-  { path: '/settings', label: '系统设置', icon: '⚙️' },
-  { path: '/logs', label: '操作日志', icon: '📋' },
+// Role-based navigation:
+// super_admin: everything except audit logs
+// ops_admin: everything except audit logs and user management
+// readonly (auditor): only audit logs
+const allNavItems = [
+  { path: '/', label: '仪表盘', icon: '📊', roles: ['super_admin', 'ops_admin'] },
+  { path: '/monitor', label: '服务监控', icon: '📡', roles: ['super_admin', 'ops_admin'] },
+  { path: '/zones', label: 'Zone 管理', icon: '🌐', roles: ['super_admin', 'ops_admin'] },
+  { path: '/dns-logs', label: '解析日志', icon: '📝', roles: ['super_admin', 'ops_admin'] },
+  { path: '/performance', label: '性能看板', icon: '📈', roles: ['super_admin', 'ops_admin'] },
+  { path: '/settings', label: '系统设置', icon: '⚙️', roles: ['super_admin', 'ops_admin'] },
+  { path: '/logs', label: '操作日志', icon: '📋', roles: ['super_admin', 'ops_admin'] },
+  { path: '/alerts', label: '告警管理', icon: '🔔', roles: ['super_admin', 'ops_admin'] },
+  { path: '/audit', label: '审计日志', icon: '🔒', roles: ['readonly'] },
+  { path: '/users', label: '用户管理', icon: '👥', roles: ['super_admin'] },
 ];
 
 export default function Sidebar() {
   const location = useLocation();
+  const { user } = useAuth();
+
+  const navItems = allNavItems.filter(item =>
+    user?.role && item.roles.includes(user.role)
+  );
 
   return (
     <aside className="w-64 bg-gray-900 text-white h-screen sticky top-0 flex flex-col flex-shrink-0">

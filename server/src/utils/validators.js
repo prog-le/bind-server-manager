@@ -75,7 +75,9 @@ function validateRecord(type, value, priority, weight, port, ttl) {
       } else if (!Number.isInteger(priority) || priority < 0 || priority > 65535) {
         errors.push('MX 优先级必须是 0 到 65535 之间的整数');
       }
-      if (!isValidHostname(value)) {
+      if (isValidIPv4(value) || isValidIPv6(value)) {
+        errors.push('MX 记录的值必须是主机名，不能是 IP 地址');
+      } else if (!isValidHostname(value)) {
         errors.push('MX 目标必须是有效的主机名');
       }
       break;
@@ -96,7 +98,9 @@ function validateRecord(type, value, priority, weight, port, ttl) {
       } else if (!Number.isInteger(port) || port < 0 || port > 65535) {
         errors.push('SRV 端口必须是 0 到 65535 之间的整数');
       }
-      if (!isValidHostname(value)) {
+      if (isValidIPv4(value) || isValidIPv6(value)) {
+        errors.push('SRV 记录的值必须是主机名，不能是 IP 地址');
+      } else if (!isValidHostname(value)) {
         errors.push('SRV 目标必须是有效的主机名');
       }
       break;
@@ -117,7 +121,9 @@ function validateRecord(type, value, priority, weight, port, ttl) {
       break;
 
     case 'PTR':
-      if (!isValidHostname(value)) {
+      if (isValidIPv4(value) || isValidIPv6(value)) {
+        errors.push('PTR 记录的值必须是主机名，不能是 IP 地址');
+      } else if (!isValidHostname(value)) {
         errors.push('PTR 目标必须是有效的主机名');
       }
       break;

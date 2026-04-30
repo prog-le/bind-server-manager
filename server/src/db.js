@@ -71,6 +71,114 @@ async function initDB() {
   try { db.run('ALTER TABLE zones ADD COLUMN soa_primary_ns TEXT DEFAULT NULL'); } catch (e) {}
   try { db.run('ALTER TABLE zones ADD COLUMN soa_admin_email TEXT DEFAULT NULL'); } catch (e) {}
 
+  // Migration: add masters column for slave zones
+  try { db.run('ALTER TABLE zones ADD COLUMN masters TEXT DEFAULT NULL'); } catch (e) {}
+
+  // Migration: add role column to users (RBAC: super_admin, ops_admin, readonly)
+  try { db.run("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'readonly'"); } catch (e) {}
+  // Ensure existing users without role get super_admin
+  try { db.run("UPDATE users SET role = 'super_admin' WHERE role IS NULL OR role = ''"); } catch (e) {}
+
+  // Ensure default system users exist with correct passwords and roles
+  try {
+    const bcrypt = require('bcryptjs');
+    const defaults = [
+      { username: 'superadmin', password: 'Superadmin@123', role: 'super_admin' },
+      { username: 'admin', password: 'Admin@123', role: 'ops_admin' },
+      { username: 'aadmin', password: 'Aadmin@123', role: 'readonly' },
+    ];
+    for (const u of defaults) {
+      const stmt = db.prepare('SELECT id, role, password FROM users WHERE username = ?');
+      stmt.bind([u.username]);
+      const hasRow = stmt.step();
+      if (hasRow) {
+        const row = stmt.getAsObject();
+        stmt.free();
+        // Fix role if wrong
+        if (row.role !== u.role) {
+          db.run('UPDATE users SET role = ? WHERE id = ?', [u.role, row.id]);
+          console.log(`Fixed role for ${u.username}: ${row.role} -> ${u.role}`);
+        }
+        // Fix password if it doesn't match
+        if (!bcrypt.compareSync(u.password, row.password)) {
+          const hash = bcrypt.hashSync(u.password, 10);
+          db.run('UPDATE users SET password = ? WHERE id = ?', [hash, row.id]);
+          console.log(`Reset password for ${u.username}`);
+        }
+      } else {
+        stmt.free();
+        const hash = bcrypt.hashSync(u.password, 10);
+        db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', [u.username, hash, u.role]);
+        console.log(`Default user created: ${u.username} (${u.role})`);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to create/fix default users:', e.message);
+  }
+
+  // Alert rules table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS alert_rules (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      name            TEXT    NOT NULL,
+      condition_type  TEXT    NOT NULL,
+      condition_params TEXT   DEFAULT '{}',
+      channels        TEXT    DEFAULT '[]',
+      enabled         INTEGER DEFAULT 1,
+      created_at      TEXT    DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Alert history table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS alert_history (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_id     INTEGER,
+      rule_name   TEXT,
+      level       TEXT    DEFAULT 'warning',
+      message     TEXT    NOT NULL,
+      channel     TEXT,
+      status      TEXT    DEFAULT 'pending',
+      sent_at     TEXT,
+      created_at  TEXT    DEFAULT (datetime('now'))
+    )
+  `);
+
+  // DNS query logs table
+  db.run(`
+    CREATE TABLE IF NOT EXISTS dns_query_logs (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      client_ip       TEXT,
+      query_name      TEXT,
+      query_type      TEXT,
+      response_code   TEXT,
+      response_data   TEXT,
+      response_time_ms INTEGER,
+      created_at      TEXT    DEFAULT (datetime('now'))
+    )
+  `);
+  // Index for fast queries
+  try { db.run('CREATE INDEX IF NOT EXISTS idx_dns_logs_created ON dns_query_logs(created_at)'); } catch (e) {}
+  try { db.run('CREATE INDEX IF NOT EXISTS idx_dns_logs_name ON dns_query_logs(query_name)'); } catch (e) {}
+
+  // Audit logs table (tamper-proof with chain hashing)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     INTEGER,
+      username    TEXT,
+      action      TEXT    NOT NULL,
+      target      TEXT,
+      detail      TEXT,
+      ip          TEXT,
+      user_agent  TEXT,
+      status      TEXT    DEFAULT 'success',
+      hash        TEXT    NOT NULL,
+      prev_hash   TEXT,
+      created_at  TEXT    DEFAULT (datetime('now'))
+    )
+  `);
+
   db.run(`
     CREATE TABLE IF NOT EXISTS records (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,

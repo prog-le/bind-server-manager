@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api';
+import BatchImportDialog from '../components/BatchImportDialog';
+import SubdomainBatchCreator from '../components/SubdomainBatchCreator';
 
 const BASIC_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'NS'];
 const ADVANCED_TYPES = ['TXT', 'SRV', 'CAA', 'PTR'];
@@ -9,6 +12,7 @@ const ALL_TYPES = [...BASIC_TYPES, ...ADVANCED_TYPES];
 export default function ZoneDetail() {
   const { name } = useParams();
   const navigate = useNavigate();
+  const { canWrite } = useAuth();
   const [zone, setZone] = useState(null);
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +25,10 @@ export default function ZoneDetail() {
   const [backups, setBackups] = useState([]);
   const [showBackups, setShowBackups] = useState(false);
   const [restoring, setRestoring] = useState(null);
+  const [selectedRecords, setSelectedRecords] = useState(new Set());
+  const [showImportDialog, setShowImportDialog] = useState(false);
+  const [batchDeleting, setBatchDeleting] = useState(false);
+  const [showSubdomainCreator, setShowSubdomainCreator] = useState(false);
 
   // Client-side validation
   function validateForm() {
@@ -196,6 +204,53 @@ export default function ZoneDetail() {
     }
   }
 
+  // Batch operations
+  function toggleSelectRecord(id) {
+    setSelectedRecords(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    if (selectedRecords.size === visibleRecords.length) {
+      setSelectedRecords(new Set());
+    } else {
+      setSelectedRecords(new Set(visibleRecords.map(r => r.id)));
+    }
+  }
+
+  async function handleBatchDelete() {
+    if (selectedRecords.size === 0) return;
+    if (!confirm(`确定删除选中的 ${selectedRecords.size} 条记录？`)) return;
+    setBatchDeleting(true);
+    try {
+      await api.delete(`/zones/${name}/records/batch`, { data: { ids: Array.from(selectedRecords) } });
+      setSelectedRecords(new Set());
+      loadZone();
+    } catch (err) {
+      alert(err.response?.data?.error || '批量删除失败');
+    } finally {
+      setBatchDeleting(false);
+    }
+  }
+
+  async function handleExport(format) {
+    try {
+      const res = await api.get(`/zones/${name}/records/export?format=${format}`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name}_records.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('导出失败');
+    }
+  }
+
   const visibleRecords = showAdvanced
     ? records
     : records.filter(r => BASIC_TYPES.includes(r.type));
@@ -226,13 +281,15 @@ export default function ZoneDetail() {
           </p>
         </div>
         <div className="flex space-x-3">
-          <button
-            onClick={handleReload}
-            className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors text-sm"
-          >
-            重载 Zone
-          </button>
-          {!isReadOnly && (
+          {canWrite && (
+            <button
+              onClick={handleReload}
+              className="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700 transition-colors text-sm"
+            >
+              重载 Zone
+            </button>
+          )}
+          {canWrite && !isReadOnly && (
             <button
               onClick={() => { resetForm(); setShowForm(true); }}
               className="bg-primary-600 text-white px-4 py-2 rounded hover:bg-primary-700 transition-colors text-sm"
@@ -242,6 +299,9 @@ export default function ZoneDetail() {
           )}
           {isSlave && (
             <span className="text-sm text-gray-500 self-center">从属 Zone 为只读</span>
+          )}
+          {!canWrite && (
+            <span className="text-sm text-gray-500 self-center">当前角色为只读</span>
           )}
         </div>
       </div>
@@ -279,7 +339,7 @@ export default function ZoneDetail() {
           </div>
 
           {/* Record Form */}
-          {showForm && (
+          {canWrite && showForm && (
             <div className="bg-white rounded-lg shadow p-6 mb-6">
               <h2 className="text-lg font-semibold mb-4">
                 {editingRecord ? '编辑记录' : '添加记录'}
@@ -395,11 +455,62 @@ export default function ZoneDetail() {
             </div>
           )}
 
+          {/* Batch Toolbar */}
+          {canWrite && (
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-3">
+                <button
+                  onClick={() => setShowImportDialog(true)}
+                  className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700"
+                >
+                  批量导入
+                </button>
+                <button
+                  onClick={() => setShowSubdomainCreator(true)}
+                  className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700"
+                >
+                  批量创建子域名
+                </button>
+                <div className="relative group">
+                  <button className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                    导出 ▾
+                  </button>
+                  <div className="absolute left-0 mt-1 w-32 bg-white rounded shadow-lg border opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+                    <button onClick={() => handleExport('csv')} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">CSV 格式</button>
+                    <button onClick={() => handleExport('json')} className="block w-full text-left px-4 py-2 text-sm hover:bg-gray-100">JSON 格式</button>
+                  </div>
+                </div>
+                {selectedRecords.size > 0 && (
+                  <button
+                    onClick={handleBatchDelete}
+                    disabled={batchDeleting}
+                    className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {batchDeleting ? '删除中...' : `删除选中 (${selectedRecords.size})`}
+                  </button>
+                )}
+              </div>
+              <span className="text-sm text-gray-500">
+                {selectedRecords.size > 0 ? `已选 ${selectedRecords.size} / ${visibleRecords.length} 条` : `共 ${visibleRecords.length} 条记录`}
+              </span>
+            </div>
+          )}
+
           {/* Records Table */}
           <div className="bg-white rounded-lg shadow overflow-hidden">
             <table className="w-full">
               <thead className="bg-gray-50 border-b">
                 <tr>
+                  {canWrite && (
+                    <th className="px-3 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={selectedRecords.size === visibleRecords.length && visibleRecords.length > 0}
+                        onChange={toggleSelectAll}
+                        className="rounded text-primary-600"
+                      />
+                    </th>
+                  )}
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">名称</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">值</th>
@@ -411,13 +522,23 @@ export default function ZoneDetail() {
               <tbody className="divide-y divide-gray-200">
                 {visibleRecords.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-6 py-8 text-center text-gray-500">
+                    <td colSpan={canWrite ? 7 : 6} className="px-6 py-8 text-center text-gray-500">
                       暂无记录，请添加您的第一条记录。
                     </td>
                   </tr>
                 ) : (
                   visibleRecords.map((rec) => (
                     <tr key={rec.id} className="hover:bg-gray-50">
+                      {canWrite && (
+                        <td className="px-3 py-4">
+                          <input
+                            type="checkbox"
+                            checked={selectedRecords.has(rec.id)}
+                            onChange={() => toggleSelectRecord(rec.id)}
+                            className="rounded text-primary-600"
+                          />
+                        </td>
+                      )}
                       <td className="px-6 py-4 font-mono text-sm">
                         {rec.name === '*' ? (
                           <span className="inline-block bg-orange-100 text-orange-800 text-xs px-2 py-1 rounded font-bold">*（泛域名）</span>
@@ -438,7 +559,7 @@ export default function ZoneDetail() {
                         {rec.port && <span>Port:{rec.port}</span>}
                       </td>
                       <td className="px-6 py-4 text-right space-x-2">
-                        {!isReadOnly && (
+                        {canWrite && !isReadOnly && (
                           <>
                             <button
                               onClick={() => startEdit(rec)}
@@ -499,13 +620,15 @@ export default function ZoneDetail() {
                           <td className="px-6 py-3 text-sm text-gray-500">{bak.created_at}</td>
                           <td className="px-6 py-3 text-sm font-mono text-gray-500 truncate max-w-xs">{bak.original_path}</td>
                           <td className="px-6 py-3 text-right">
-                            <button
-                              onClick={() => handleRestoreBackup(bak.id)}
-                              disabled={restoring === bak.id}
-                              className="text-primary-600 hover:text-primary-800 text-sm disabled:opacity-50"
-                            >
-                              {restoring === bak.id ? '恢复中...' : '恢复'}
-                            </button>
+                            {canWrite && (
+                              <button
+                                onClick={() => handleRestoreBackup(bak.id)}
+                                disabled={restoring === bak.id}
+                                className="text-primary-600 hover:text-primary-800 text-sm disabled:opacity-50"
+                              >
+                                {restoring === bak.id ? '恢复中...' : '恢复'}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -516,6 +639,24 @@ export default function ZoneDetail() {
             )}
           </div>
         </>
+      )}
+
+      {/* Batch Import Dialog */}
+      {showImportDialog && (
+        <BatchImportDialog
+          zoneName={name}
+          onClose={() => setShowImportDialog(false)}
+          onImported={() => { setShowImportDialog(false); loadZone(); }}
+        />
+      )}
+
+      {/* Subdomain Batch Creator */}
+      {showSubdomainCreator && (
+        <SubdomainBatchCreator
+          zoneName={name}
+          onClose={() => setShowSubdomainCreator(false)}
+          onCreated={() => { setShowSubdomainCreator(false); loadZone(); }}
+        />
       )}
     </div>
   );

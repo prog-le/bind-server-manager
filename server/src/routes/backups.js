@@ -1,8 +1,11 @@
 const express = require('express');
 const fs = require('fs');
+const path = require('path');
 const { query, queryOne, run } = require('../db');
 const bindService = require('../services/bind');
+const backupScheduler = require('../services/backupScheduler');
 const authMiddleware = require('../middleware/auth');
+const { requireRole } = require('../middleware/auth');
 const { addLog, getClientIp } = require('../utils/logger');
 
 const router = express.Router();
@@ -30,7 +33,77 @@ router.get('/', (req, res) => {
   res.json({ backups });
 });
 
-// GET /api/backups/:id — view backup content
+// ===== Full Backup =====
+
+// POST /api/backups/full — create a full backup now
+router.post('/full', requireRole('super_admin', 'ops_admin'), async (req, res) => {
+  try {
+    const result = await backupScheduler.createFullBackup();
+    addLog({
+      userId: req.user.id,
+      username: req.user.username,
+      action: 'full_backup',
+      target: 'system',
+      detail: `Full backup created: ${result.name} (${(result.size / 1024 / 1024).toFixed(2)} MB)`,
+      ip: getClientIp(req),
+    });
+    res.json({
+      message: '全量备份已创建',
+      backup: { name: result.name, size: result.size },
+    });
+  } catch (err) {
+    res.status(500).json({ error: '全量备份失败：' + err.message });
+  }
+});
+
+// GET /api/backups/full — list full backups
+router.get('/full', (req, res) => {
+  const backups = backupScheduler.listFullBackups();
+  res.json({ backups });
+});
+
+// GET /api/backups/full/:name/download — download a full backup
+router.get('/full/:name/download', requireRole('super_admin', 'ops_admin'), (req, res) => {
+  const filePath = backupScheduler.getBackupFilePath(req.params.name);
+  if (!filePath) return res.status(404).json({ error: '备份文件不存在' });
+  res.download(filePath);
+});
+
+// DELETE /api/backups/full/:name — delete a full backup
+router.delete('/full/:name', requireRole('super_admin'), (req, res) => {
+  const deleted = backupScheduler.deleteFullBackup(req.params.name);
+  if (!deleted) return res.status(404).json({ error: '备份文件不存在' });
+  res.json({ message: '备份已删除' });
+});
+
+// ===== Scheduled Backup Config =====
+
+// GET /api/backups/schedule — get schedule config
+router.get('/schedule', (req, res) => {
+  const config = backupScheduler.getScheduleConfig();
+  res.json({ config });
+});
+
+// PUT /api/backups/schedule — update schedule config
+router.put('/schedule', requireRole('super_admin'), (req, res) => {
+  const { enabled, cron: cronExpr, retain } = req.body;
+  const cfg = backupScheduler.getScheduleConfig();
+
+  if (enabled !== undefined) cfg.enabled = !!enabled;
+  if (cronExpr) {
+    const { validate } = require('node-cron');
+    if (!validate(cronExpr)) {
+      return res.status(400).json({ error: '无效的 Cron 表达式' });
+    }
+    cfg.cron = cronExpr;
+  }
+  if (retain !== undefined) cfg.retain = Math.max(1, Math.min(30, parseInt(retain) || 7));
+
+  backupScheduler.saveScheduleConfig(cfg);
+  res.json({ message: '备份计划已更新', config: cfg });
+});
+
+// GET /api/backups/:id — view backup content (must be after /full and /schedule)
 router.get('/:id', (req, res) => {
   const backup = queryOne('SELECT * FROM backups WHERE id = ?', [req.params.id]);
   if (!backup) {
@@ -49,8 +122,8 @@ router.get('/:id', (req, res) => {
   }
 });
 
-// POST /api/backups/:id/restore — restore a backup
-router.post('/:id/restore', (req, res) => {
+// POST /api/backups/:id/restore — restore a backup (super_admin only)
+router.post('/:id/restore', requireRole('super_admin'), (req, res) => {
   const backup = queryOne('SELECT * FROM backups WHERE id = ?', [req.params.id]);
   if (!backup) {
     return res.status(404).json({ error: '备份不存在' });

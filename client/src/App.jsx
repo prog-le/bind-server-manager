@@ -8,6 +8,12 @@ import ZoneList from './pages/ZoneList';
 import ZoneDetail from './pages/ZoneDetail';
 import Settings from './pages/Settings';
 import Logs from './pages/Logs';
+import Users from './pages/Users';
+import Audit from './pages/Audit';
+import Monitor from './pages/Monitor';
+import DnsLogs from './pages/DnsLogs';
+import Alerts from './pages/Alerts';
+import Performance from './pages/Performance';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -26,6 +32,12 @@ export default function App() {
         <Route path="zones/:name" element={<ZoneDetail />} />
         <Route path="settings" element={<Settings />} />
         <Route path="logs" element={<Logs />} />
+        <Route path="audit" element={<Audit />} />
+        <Route path="monitor" element={<Monitor />} />
+        <Route path="dns-logs" element={<DnsLogs />} />
+        <Route path="alerts" element={<Alerts />} />
+        <Route path="performance" element={<Performance />} />
+        <Route path="users" element={<Users />} />
       </Route>
     </Routes>
   );

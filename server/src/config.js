@@ -49,9 +49,10 @@ const config = {
 };
 
 // Allowed base directories for BIND paths (path whitelist)
+const localZoneDir = path.join(__dirname, '..', 'data', 'zones');
 const ALLOWED_PATHS = {
   config: ['/etc/bind/', '/etc/named/', '/etc/named.conf', '/usr/local/etc/'],
-  zone: ['/var/named/', '/var/cache/bind/', '/etc/bind/zones/'],
+  zone: ['/var/named/', '/var/cache/bind/', '/etc/bind/zones/', localZoneDir],
   rndc: ['/usr/sbin/', '/usr/bin/', '/usr/local/sbin/'],
 };
 

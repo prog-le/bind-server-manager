@@ -218,13 +218,16 @@ function isZoneInNamedConf(zoneName) {
   return false;
 }
 
-function addToNamedConf(zoneName, filePath, type = 'master', forwarders = null, forwardType = 'only') {
+function addToNamedConf(zoneName, filePath, type = 'master', forwarders = null, forwardType = 'only', masters = null) {
   if (isZoneInNamedConf(zoneName)) return;
 
   let entry;
   if (type === 'forward') {
     const forwarderList = forwarders ? forwarders.split(/[;,]/).filter(Boolean).map(f => f.trim()).join('; ') + ';' : '';
     entry = `\nzone "${zoneName}" {\n    type forward;\n    forward ${forwardType};\n    forwarders { ${forwarderList} };\n};\n`;
+  } else if (type === 'slave') {
+    const mastersList = masters ? masters.split(/[;,]/).filter(Boolean).map(m => m.trim() + ';').join(' ') : '';
+    entry = `\nzone "${zoneName}" {\n    type slave;\n    file "${filePath}";\n    masters { ${mastersList} };\n    allow-transfer { none; };\n};\n`;
   } else {
     entry = `\nzone "${zoneName}" {\n    type ${type};\n    file "${filePath}";\n    allow-transfer { none; };\n};\n`;
   }
@@ -261,21 +264,7 @@ function addToNamedConf(zoneName, filePath, type = 'master', forwarders = null, 
     }
   }
 
-  // Fallback: create main config
-  try {
-    const tmpPath = configPath + '.tmp.' + process.pid;
-    fs.writeFileSync(tmpPath, entry, 'utf8');
-    const checkResult = checkConfig(tmpPath);
-    if (!checkResult.success) {
-      try { fs.unlinkSync(tmpPath); } catch {}
-      throw new Error(`named-checkconf failed: ${checkResult.error}`);
-    }
-    fs.renameSync(tmpPath, configPath);
-    console.log(`Created ${configPath} with zone "${zoneName}"`);
-  } catch (err) {
-    console.error(`Failed to create ${configPath}:`, err.message);
-    throw new Error('Cannot write zone entry to any config file');
-  }
+  throw new Error('无法将 Zone 条目写入任何配置文件');
 }
 
 function removeFromNamedConf(zoneName) {
@@ -321,6 +310,84 @@ function removeFromNamedConf(zoneName) {
 }
 
 // ─── Status ────────────────────────────────────────────────────
+
+/**
+ * Ensure BIND has query logging enabled.
+ * Returns the query log file path, or null if unable to configure.
+ */
+function ensureQueryLogging() {
+  const { configPath, zoneDir } = getPaths();
+  // Use zoneDir (usually /var/cache/bind/) as log location — BIND has write access there
+  const logDir = zoneDir || '/var/cache/bind';
+  const logFile = path.join(logDir, 'query.log');
+
+  // Read all config files (main + includes)
+  let fullConfig = '';
+  try {
+    fullConfig = fs.readFileSync(configPath, 'utf8');
+    const includeRegex = /include\s+"([^"]+)"/g;
+    let m;
+    while ((m = includeRegex.exec(fullConfig)) !== null) {
+      try { if (fs.existsSync(m[1])) fullConfig += '\n' + fs.readFileSync(m[1], 'utf8'); } catch {}
+    }
+  } catch {}
+
+  // Check if query logging is already correctly configured
+  if (/category\s+queries\s*\{/.test(fullConfig)) {
+    // Check if the log file path is correct
+    const match = fullConfig.match(/channel\s+\w+\s*\{[^}]*file\s+"([^"]+)"/);
+    if (match && match[1] === logFile) {
+      return logFile; // Already correctly configured
+    }
+    // Path is wrong — fall through to update it
+  }
+
+  // Add or update query logging in named.conf
+  try {
+    let config = fs.readFileSync(configPath, 'utf8');
+
+    const channelDef = `    channel query_log {
+        file "${logFile}" versions 3 size 50m;
+        severity dynamic;
+        print-time yes;
+        print-category yes;
+        print-severity yes;
+    };
+    category queries {
+        query_log;
+    };`;
+
+    if (/^logging\s*\{/m.test(config)) {
+      // Logging block exists — replace it entirely with correct config
+      config = config.replace(/logging\s*\{[\s\S]*?\};\s*$/, `logging {\n${channelDef}\n};\n`);
+    } else {
+      // No logging block — append one
+      config += `\nlogging {\n${channelDef}\n};\n`;
+    }
+
+    // Validate before writing
+    const tmpPath = configPath + '.tmp.' + process.pid;
+    fs.writeFileSync(tmpPath, config, 'utf8');
+    const checkResult = checkConfig(tmpPath);
+    if (!checkResult.success) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      console.error('Failed to add query logging config:', checkResult.error);
+      return null;
+    }
+
+    // Backup and atomic write
+    backupFile(configPath, 'named.conf');
+    fs.renameSync(tmpPath, configPath);
+
+    // Reconfig BIND to pick up the change
+    reconfig();
+    console.log('Query logging enabled:', logFile);
+    return logFile;
+  } catch (err) {
+    console.error('Failed to enable query logging:', err.message);
+    return null;
+  }
+}
 
 function checkStatus() {
   const { rndcPath } = getPaths();
@@ -405,4 +472,5 @@ module.exports = {
   checkConfig,
   checkZoneFile,
   deleteZoneFile,
+  ensureQueryLogging,
 };

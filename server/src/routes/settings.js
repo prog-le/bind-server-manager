@@ -1,9 +1,12 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const { query } = require('../db');
 const bindService = require('../services/bind');
 const authMiddleware = require('../middleware/auth');
+const { requireRole } = require('../middleware/auth');
 const { addLog, getClientIp } = require('../utils/logger');
 const { isPathAllowed } = require('../config');
+const { analyzeError } = require('../utils/config-advisor');
 
 const router = express.Router();
 
@@ -21,8 +24,8 @@ router.get('/', (req, res) => {
   });
 });
 
-// PUT /api/settings — update BIND paths with whitelist validation
-router.put('/', [
+// PUT /api/settings — update BIND paths with whitelist validation (ops_admin+)
+router.put('/', requireRole('super_admin', 'ops_admin'), [
   body('bind_config_path').optional().isString(),
   body('bind_zone_dir').optional().isString(),
   body('rndc_path').optional().isString(),
@@ -74,6 +77,75 @@ router.get('/detect', (req, res) => {
 router.get('/status', (req, res) => {
   const status = bindService.checkStatus();
   res.json(status);
+});
+
+// GET /api/settings/check — validate named.conf
+router.get('/check', (req, res) => {
+  const { configPath } = bindService.getPaths();
+  const result = bindService.checkConfig(configPath);
+  const issues = result.success ? [] : analyzeError(result.error);
+  res.json({
+    valid: result.success,
+    path: configPath,
+    issues,
+    raw: result.success ? null : result.error,
+  });
+});
+
+// GET /api/settings/check-zone/:name — validate a specific zone file
+router.get('/check-zone/:name', (req, res) => {
+  const zone = query('SELECT * FROM zones WHERE name = ?', [req.params.name])[0];
+  if (!zone) return res.status(404).json({ error: 'Zone 不存在' });
+  if (zone.type === 'forward') return res.json({ valid: true, message: '转发 Zone 无需校验文件' });
+
+  const result = bindService.checkZoneFile(zone.name, zone.file_path);
+  const issues = result.success ? [] : analyzeError(result.error);
+  res.json({
+    valid: result.success,
+    zone: zone.name,
+    path: zone.file_path,
+    issues,
+    raw: result.success ? null : result.error,
+  });
+});
+
+// GET /api/settings/check-all — validate all zones and config
+router.get('/check-all', (req, res) => {
+  const { configPath } = bindService.getPaths();
+
+  // Check main config
+  const configResult = bindService.checkConfig(configPath);
+  const results = {
+    config: {
+      valid: configResult.success,
+      path: configPath,
+      issues: configResult.success ? [] : analyzeError(configResult.error),
+    },
+    zones: [],
+    summary: { total: 0, valid: 0, invalid: 0 },
+  };
+
+  // Check all zones
+  const zones = query('SELECT * FROM zones WHERE type != ?', ['forward']);
+  results.summary.total = zones.length;
+
+  for (const zone of zones) {
+    const zoneResult = bindService.checkZoneFile(zone.name, zone.file_path);
+    const entry = {
+      name: zone.name,
+      valid: zoneResult.success,
+      path: zone.file_path,
+      issues: zoneResult.success ? [] : analyzeError(zoneResult.error),
+    };
+    results.zones.push(entry);
+    if (zoneResult.success) results.summary.valid++;
+    else results.summary.invalid++;
+  }
+
+  // Overall status
+  results.summary.healthy = configResult.success && results.summary.invalid === 0;
+
+  res.json(results);
 });
 
 module.exports = router;

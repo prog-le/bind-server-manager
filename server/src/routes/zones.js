@@ -5,6 +5,7 @@ const { query, queryOne, run } = require('../db');
 const bindService = require('../services/bind');
 const { generateZoneFile, generateSerial } = require('../utils/zonefile');
 const authMiddleware = require('../middleware/auth');
+const { requireRole } = require('../middleware/auth');
 const { addLog, getClientIp } = require('../utils/logger');
 
 const reloadLimiter = rateLimit({
@@ -26,8 +27,8 @@ router.get('/', (req, res) => {
   res.json({ zones });
 });
 
-// POST /api/zones — create a new zone
-router.post('/', [
+// POST /api/zones — create a new zone (ops_admin+)
+router.post('/', requireRole('super_admin', 'ops_admin'), [
   body('name').notEmpty()
     .matches(/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/)
     .custom(v => !v.includes('..') && !v.includes('/'))
@@ -35,16 +36,21 @@ router.post('/', [
   body('type').optional().isIn(['master', 'slave', 'forward']),
   body('forwarders').optional().trim(),
   body('forward_type').optional().isIn(['only', 'first']),
+  body('masters').optional().trim(),
 ], (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
   }
 
-  const { name, type = 'master', forwarders = '', forward_type = 'only' } = req.body;
+  const { name, type = 'master', forwarders = '', forward_type = 'only', masters = '' } = req.body;
 
   if (type === 'forward' && !forwarders) {
     return res.status(400).json({ error: '转发 Zone 必须指定转发服务器' });
+  }
+
+  if (type === 'slave' && !masters) {
+    return res.status(400).json({ error: '从属 Zone 必须指定主服务器地址' });
   }
 
   // Check if zone already exists
@@ -59,8 +65,8 @@ router.post('/', [
 
     // Insert into database
     const result = run(
-      'INSERT INTO zones (name, type, file_path, forwarders, forward_type) VALUES (?, ?, ?, ?, ?)',
-      [name, type, filePath, forwarders || null, type === 'forward' ? forward_type : null]
+      'INSERT INTO zones (name, type, file_path, forwarders, forward_type, masters) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, type, filePath, forwarders || null, type === 'forward' ? forward_type : null, type === 'slave' ? masters : null]
     );
 
     const zoneId = result.lastInsertRowid;
@@ -75,8 +81,18 @@ router.post('/', [
         zone: { id: zoneId, name, type, forwarders, forward_type },
         message: '转发 Zone 创建成功',
       });
+    } else if (type === 'slave') {
+      // Slave zones: no records, no zone file — data comes from master via AXFR
+      bindService.addToNamedConf(name, filePath, type, null, null, masters);
+      bindService.reconfig();
+
+      addLog({ userId: req.user.id, username: req.user.username, action: 'create_zone', target: name, detail: `type=${type}, masters=${masters}`, ip: getClientIp(req) });
+      res.json({
+        zone: { id: zoneId, name, type, file_path: filePath, masters },
+        message: '从属 Zone 创建成功',
+      });
     } else {
-      // Master/slave zones: create records + zone file
+      // Master zones: create records + zone file
       const defaultRecords = [
         { name: '@', type: 'NS', value: `ns1.${name}`, ttl: 3600 },
         { name: '@', type: 'NS', value: `ns2.${name}`, ttl: 3600 },
@@ -123,8 +139,8 @@ router.get('/:name', (req, res) => {
   res.json({ zone, records });
 });
 
-// DELETE /api/zones/:name — delete a zone
-router.delete('/:name', (req, res) => {
+// DELETE /api/zones/:name — delete a zone (ops_admin+)
+router.delete('/:name', requireRole('super_admin', 'ops_admin'), (req, res) => {
   const zone = queryOne('SELECT * FROM zones WHERE name = ?', [req.params.name]);
   if (!zone) {
     return res.status(404).json({ error: 'Zone 不存在' });
@@ -151,15 +167,15 @@ router.delete('/:name', (req, res) => {
   }
 });
 
-// POST /api/zones/:name/reload — manual reload
-router.post('/:name/reload', reloadLimiter, (req, res) => {
+// POST /api/zones/:name/reload — manual reload (ops_admin+)
+router.post('/:name/reload', requireRole('super_admin', 'ops_admin'), reloadLimiter, (req, res) => {
   const zone = queryOne('SELECT * FROM zones WHERE name = ?', [req.params.name]);
   if (!zone) {
     return res.status(404).json({ error: 'Zone 不存在' });
   }
 
   try {
-    if (zone.type !== 'forward') {
+    if (zone.type === 'master') {
       // Auto-create NS records if missing (BIND requires at least one)
       const nsRecords = query('SELECT * FROM records WHERE zone_id = ? AND type = ?', [zone.id, 'NS']);
       if (nsRecords.length === 0) {
@@ -176,11 +192,13 @@ router.post('/:name/reload', reloadLimiter, (req, res) => {
       bindService.writeZoneFile(zone.name, zoneContent);
       run('UPDATE zones SET soa_serial = ? WHERE id = ?', [newSerial, zone.id]);
     }
+    // Slave zones get data from master via AXFR — no local zone file regeneration
+    // Forward zones have no zone file
 
     // Ensure zone entry exists in named.conf
     if (!bindService.isZoneInNamedConf(zone.name)) {
       console.log(`Zone "${zone.name}" not found in named.conf, adding...`);
-      bindService.addToNamedConf(zone.name, zone.file_path, zone.type, zone.forwarders, zone.forward_type);
+      bindService.addToNamedConf(zone.name, zone.file_path, zone.type, zone.forwarders, zone.forward_type, zone.masters);
       bindService.reconfig();
     }
 

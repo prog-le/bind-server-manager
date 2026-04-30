@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import api from '../api';
 
 export default function ZoneList() {
+  const { canWrite } = useAuth();
   const [zones, setZones] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -70,12 +72,14 @@ export default function ZoneList() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">DNS Zone 管理</h1>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="bg-primary-600 text-white px-4 py-2 rounded hover:bg-primary-700 transition-colors"
-        >
-          {showCreate ? '取消' : '创建 Zone'}
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            className="bg-primary-600 text-white px-4 py-2 rounded hover:bg-primary-700 transition-colors"
+          >
+            {showCreate ? '取消' : '创建 Zone'}
+          </button>
+        )}
       </div>
 
       {showCreate && (
@@ -173,12 +177,14 @@ export default function ZoneList() {
                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">{zone.created_at}</td>
                   <td className="px-6 py-4 text-right">
-                    <button
-                      onClick={() => handleDelete(zone.name)}
-                      className="text-red-600 hover:text-red-800 text-sm"
-                    >
-                      删除
-                    </button>
+                    {canWrite && (
+                      <button
+                        onClick={() => handleDelete(zone.name)}
+                        className="text-red-600 hover:text-red-800 text-sm"
+                      >
+                        删除
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))

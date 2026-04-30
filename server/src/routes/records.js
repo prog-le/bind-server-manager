@@ -4,6 +4,7 @@ const bindService = require('../services/bind');
 const { generateZoneFile, generateSerial } = require('../utils/zonefile');
 const { validateRecord, validateRecordName, validateZoneRecords } = require('../utils/validators');
 const authMiddleware = require('../middleware/auth');
+const { requireRole } = require('../middleware/auth');
 const { addLog, getClientIp } = require('../utils/logger');
 
 const router = express.Router();
@@ -78,8 +79,8 @@ router.get('/:name/records', (req, res) => {
   res.json({ records });
 });
 
-// POST /api/zones/:name/records
-router.post('/:name/records', (req, res) => {
+// POST /api/zones/:name/records (ops_admin+)
+router.post('/:name/records', requireRole('super_admin', 'ops_admin'), (req, res) => {
   const zone = queryOne('SELECT * FROM zones WHERE name = ?', [req.params.name]);
   if (!zone) return res.status(404).json({ error: 'Zone 不存在' });
 
@@ -152,8 +153,8 @@ router.post('/:name/records', (req, res) => {
   }
 });
 
-// PUT /api/zones/:name/records/:id
-router.put('/:name/records/:id', (req, res) => {
+// PUT /api/zones/:name/records/:id (ops_admin+)
+router.put('/:name/records/:id', requireRole('super_admin', 'ops_admin'), (req, res) => {
   const zone = queryOne('SELECT * FROM zones WHERE name = ?', [req.params.name]);
   if (!zone) return res.status(404).json({ error: 'Zone 不存在' });
 
@@ -226,8 +227,8 @@ router.put('/:name/records/:id', (req, res) => {
   }
 });
 
-// DELETE /api/zones/:name/records/:id
-router.delete('/:name/records/:id', (req, res) => {
+// DELETE /api/zones/:name/records/:id (ops_admin+)
+router.delete('/:name/records/:id', requireRole('super_admin', 'ops_admin'), (req, res) => {
   const zone = queryOne('SELECT * FROM zones WHERE name = ?', [req.params.name]);
   if (!zone) return res.status(404).json({ error: 'Zone 不存在' });
 

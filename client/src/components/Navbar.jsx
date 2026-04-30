@@ -2,6 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
 
+const ROLE_LABELS = {
+  super_admin: '超级管理员',
+  ops_admin: '运维管理员',
+  readonly: '审计员',
+};
+
 export default function Navbar() {
   const { user, logout } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -44,7 +50,7 @@ export default function Navbar() {
                 {/* User info */}
                 <div className="px-4 py-3 border-b border-gray-100">
                   <p className="text-sm font-medium text-gray-900">{user?.username}</p>
-                  <p className="text-xs text-gray-500 mt-0.5">管理员</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{ROLE_LABELS[user?.role] || user?.role || '未知角色'}</p>
                 </div>
 
                 {/* Menu items */}
