@@ -39,6 +39,15 @@ BIND 9 DNS 服务器 Web 管理系统，提供 Zone 管理、DNS 记录管理、
 - **配置校验器** — BIND 配置语法检查
 - **管理员 Profile** — 修改密码、系统信息查看
 
+## 截图
+### <img width="1920" height="955" alt="ScreenShot_2026-04-29_225117_058" src="https://github.com/user-attachments/assets/2d5dad32-dfca-4aef-989c-a5ce98941a70" />
+###
+### <img width="1903" height="954" alt="ScreenShot_2026-04-29_225148_037" src="https://github.com/user-attachments/assets/00cf32de-cb3b-42cf-a91f-eec98a4afe10" />
+###
+### <img width="1904" height="951" alt="ScreenShot_2026-04-29_225202_881" src="https://github.com/user-attachments/assets/e8f6462c-f20d-4396-8778-42c6c0f410bb" />
+###
+### <img width="525" height="821" alt="ScreenShot_2026-04-29_225325_520" src="https://github.com/user-attachments/assets/ed2d7d1a-84ca-462a-9196-8937ffd6d28c" />
+
 ## 技术栈
 
 | 层 | 技术 |
