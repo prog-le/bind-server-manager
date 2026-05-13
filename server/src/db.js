@@ -79,41 +79,44 @@ async function initDB() {
   // Ensure existing users without role get super_admin
   try { db.run("UPDATE users SET role = 'super_admin' WHERE role IS NULL OR role = ''"); } catch (e) {}
 
-  // Ensure default system users exist with correct passwords and roles
+  // Login failure tracking table (persists across server restarts)
+  db.run(`
+    CREATE TABLE IF NOT EXISTS login_failures (
+      ip            TEXT PRIMARY KEY,
+      attempt_count INTEGER DEFAULT 1,
+      first_failed  TEXT DEFAULT (datetime('now')),
+      locked_until  TEXT DEFAULT NULL,
+      updated_at    TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Create default users with random passwords on first init
   try {
     const bcrypt = require('bcryptjs');
-    const defaults = [
-      { username: 'superadmin', password: 'Superadmin@123', role: 'super_admin' },
-      { username: 'admin', password: 'Admin@123', role: 'ops_admin' },
-      { username: 'aadmin', password: 'Aadmin@123', role: 'readonly' },
+    const defaultUsers = [
+      { username: 'superadmin', role: 'super_admin', label: '超级管理员' },
+      { username: 'admin', role: 'ops_admin', label: '运维管理员' },
+      { username: 'aadmin', role: 'readonly', label: '审计员' },
     ];
-    for (const u of defaults) {
-      const stmt = db.prepare('SELECT id, role, password FROM users WHERE username = ?');
-      stmt.bind([u.username]);
-      const hasRow = stmt.step();
-      if (hasRow) {
-        const row = stmt.getAsObject();
-        stmt.free();
-        // Fix role if wrong
-        if (row.role !== u.role) {
-          db.run('UPDATE users SET role = ? WHERE id = ?', [u.role, row.id]);
-          console.log(`Fixed role for ${u.username}: ${row.role} -> ${u.role}`);
-        }
-        // Fix password if it doesn't match
-        if (!bcrypt.compareSync(u.password, row.password)) {
-          const hash = bcrypt.hashSync(u.password, 10);
-          db.run('UPDATE users SET password = ? WHERE id = ?', [hash, row.id]);
-          console.log(`Reset password for ${u.username}`);
-        }
-      } else {
-        stmt.free();
-        const hash = bcrypt.hashSync(u.password, 10);
+    const userCount = db.exec('SELECT COUNT(*) as cnt FROM users')[0]?.values[0]?.[0] || 0;
+
+    if (userCount === 0) {
+      // Fresh install — generate random passwords and print them
+      console.log('='.repeat(60));
+      console.log('首次初始化 — 请立即记录以下默认用户密码：');
+      console.log('='.repeat(60));
+      for (const u of defaultUsers) {
+        const password = crypto.randomBytes(16).toString('hex');
+        const hash = bcrypt.hashSync(password, 10);
         db.run('INSERT INTO users (username, password, role) VALUES (?, ?, ?)', [u.username, hash, u.role]);
-        console.log(`Default user created: ${u.username} (${u.role})`);
+        console.log(`  用户名: ${u.username.padEnd(12)} 角色: ${u.label.padEnd(10)} 密码: ${password}`);
       }
+      console.log('='.repeat(60));
+      console.log('⚠️  请立即修改这些密码！在"系统设置"或"修改密码"功能中进行。');
+      console.log('='.repeat(60));
     }
   } catch (e) {
-    console.error('Failed to create/fix default users:', e.message);
+    console.error('Failed to create default users:', e.message);
   }
 
   // Alert rules table
@@ -228,6 +231,8 @@ async function initDB() {
 // Save database to disk
 function saveDB() {
   if (!db) return;
+  // Checkpoint WAL to ensure all data is in the main database before export
+  try { db.run('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
   const data = db.export();
   const buffer = Buffer.from(data);
   fs.writeFileSync(config.dbPath, buffer);
@@ -243,15 +248,18 @@ function getDB() {
 function query(sql, params = []) {
   const database = getDB();
   const stmt = database.prepare(sql);
-  if (params.length > 0) {
-    stmt.bind(params);
+  try {
+    if (params.length > 0) {
+      stmt.bind(params);
+    }
+    const results = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject());
+    }
+    return results;
+  } finally {
+    stmt.free();
   }
-  const results = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return results;
 }
 
 // Helper: run a query and return first row

@@ -273,8 +273,13 @@ function removeFromNamedConf(zoneName) {
 
   let content = fs.readFileSync(configPath, 'utf8');
   const escapedName = escapeRegex(zoneName);
-  const zoneRegex = new RegExp(`\\n?zone\\s+"${escapedName}"\\s*\\{`);
-  const match = content.match(zoneRegex);
+  const zoneRegex = new RegExp(`zone\\s+"${escapedName}"\\s*\\{`);
+  let match;
+
+  // Find a zone block that is NOT inside a comment
+  while ((match = zoneRegex.exec(content)) !== null) {
+    if (!isInsideComment(content, match.index)) break;
+  }
   if (!match) return;
 
   const startIdx = match.index;
@@ -307,6 +312,24 @@ function removeFromNamedConf(zoneName) {
 
   backupFile(configPath, 'named.conf');
   fs.renameSync(tmpPath, configPath);
+}
+
+/**
+ * Check if a position in the content is inside a comment (// or /* *\/)
+ */
+function isInsideComment(content, index) {
+  const beforeMatch = content.slice(0, index);
+  // Block comment: check for unclosed /*
+  const lastBlockStart = beforeMatch.lastIndexOf('/*');
+  if (lastBlockStart >= 0) {
+    const blockEnd = beforeMatch.indexOf('*/', lastBlockStart);
+    if (blockEnd === -1) return true;
+  }
+  // Single-line comment: check for // on the same line before the match
+  const lineStart = beforeMatch.lastIndexOf('\n') + 1;
+  const linePortion = beforeMatch.slice(lineStart);
+  if (linePortion.includes('//')) return true;
+  return false;
 }
 
 // ─── Status ────────────────────────────────────────────────────
@@ -342,11 +365,11 @@ function ensureQueryLogging() {
     // Path is wrong — fall through to update it
   }
 
-  // Add or update query logging in named.conf
+  // Add or update query logging in named.conf — preserve existing logging config
   try {
     let config = fs.readFileSync(configPath, 'utf8');
 
-    const channelDef = `    channel query_log {
+    const queryLogSnippet = `    channel query_log {
         file "${logFile}" versions 3 size 50m;
         severity dynamic;
         print-time yes;
@@ -358,11 +381,14 @@ function ensureQueryLogging() {
     };`;
 
     if (/^logging\s*\{/m.test(config)) {
-      // Logging block exists — replace it entirely with correct config
-      config = config.replace(/logging\s*\{[\s\S]*?\};\s*$/, `logging {\n${channelDef}\n};\n`);
+      // Logging block exists — append query_log channel + queries category inside it
+      config = config.replace(
+        /(logging\s*\{)/,
+        '$1\n' + queryLogSnippet
+      );
     } else {
       // No logging block — append one
-      config += `\nlogging {\n${channelDef}\n};\n`;
+      config += `\nlogging {\n${queryLogSnippet}\n};\n`;
     }
 
     // Validate before writing
@@ -447,6 +473,25 @@ function checkStatus() {
   return { running: false, error: 'BIND/named process not detected' };
 }
 
+/**
+ * Validate zone file content without writing to the actual zone file.
+ * Writes to a temp file, runs named-checkzone, then cleans up.
+ * Throws on validation failure.
+ */
+function validateZoneContent(zoneName, content) {
+  const { zoneDir } = getPaths();
+  const tmpPath = path.join(zoneDir, `.validate.${zoneName}.${process.pid}.tmp`);
+  try {
+    fs.writeFileSync(tmpPath, content, 'utf8');
+    const checkResult = checkZoneFile(zoneName, tmpPath);
+    if (!checkResult.success) {
+      throw new Error(`Dry-run zone validation failed: ${checkResult.error}`);
+    }
+  } finally {
+    try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
+  }
+}
+
 function deleteZoneFile(filePath) {
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 }
@@ -473,4 +518,5 @@ module.exports = {
   checkZoneFile,
   deleteZoneFile,
   ensureQueryLogging,
+  validateZoneContent,
 };

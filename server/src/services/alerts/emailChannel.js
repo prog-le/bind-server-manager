@@ -20,6 +20,15 @@ function initTransporter(config) {
 /**
  * Send alert email
  */
+async function htmlEscape(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function sendEmail(config, { subject, message, level }) {
   if (!transporter) {
     initTransporter(config);
@@ -35,9 +44,9 @@ async function sendEmail(config, { subject, message, level }) {
       html: `
         <div style="font-family: sans-serif; padding: 20px;">
           <h2 style="color: ${level === 'critical' ? '#dc2626' : level === 'warning' ? '#d97706' : '#2563eb'};">
-            ${levelEmoji[level] || '⚠️'} ${subject}
+            ${levelEmoji[level] || '⚠️'} ${htmlEscape(subject)}
           </h2>
-          <pre style="background: #f3f4f6; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${message}</pre>
+          <pre style="background: #f3f4f6; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${htmlEscape(message)}</pre>
           <p style="color: #6b7280; font-size: 12px; margin-top: 20px;">
             BIND SERVER MANAGER | ${new Date().toLocaleString('zh-CN')}
           </p>

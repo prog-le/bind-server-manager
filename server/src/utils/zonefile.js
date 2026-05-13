@@ -129,8 +129,14 @@ function formatMXRecord(rec) {
 function formatTXTRecord(rec) {
   const name = rec.name === '@' ? '@' : rec.name;
   const ttl = rec.ttl ? ` ${rec.ttl}` : '';
-  const value = rec.value.startsWith('"') ? rec.value : `"${rec.value}"`;
-  return `${name.padEnd(16)}${ttl.padEnd(8)}IN  TXT     ${value}\n`;
+  // Escape special BIND zone file characters inside TXT values
+  let value = rec.value;
+  if (value.startsWith('"') && value.endsWith('"')) {
+    // Already quoted — extract inner content
+    value = value.slice(1, -1);
+  }
+  value = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/;/g, '\\;');
+  return `${name.padEnd(16)}${ttl.padEnd(8)}IN  TXT     "${value}"\n`;
 }
 
 function formatSRVRecord(rec) {

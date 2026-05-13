@@ -117,6 +117,15 @@ router.post('/:name/records', requireRole('super_admin', 'ops_admin'), (req, res
     return res.status(409).json({ error: wildcardCheck.msg });
   }
 
+  // Check for duplicate record (same name + type + value)
+  const duplicate = queryOne(
+    'SELECT id FROM records WHERE zone_id = ? AND name = ? AND type = ? AND value = ?',
+    [zone.id, name, type, value]
+  );
+  if (duplicate) {
+    return res.status(409).json({ error: `记录已存在（${name} ${type} ${value}）` });
+  }
+
   // Zone-level NS/SOA validation (simulate adding this record)
   const currentRecords = query('SELECT * FROM records WHERE zone_id = ?', [zone.id]);
   const simulatedRecords = [...currentRecords, { name, type, value }];
@@ -134,10 +143,21 @@ router.post('/:name/records', requireRole('super_admin', 'ops_admin'), (req, res
     warning = (warning ? warning + '\n' : '') + zoneValidation.warnings.join('\n');
   }
 
+  // Validate zone file before DB write (dry-run against temp file)
+  try {
+    if (zone.type === 'master') {
+      const dryRunSerial = generateSerial(zone.soa_serial);
+      const dryRunContent = generateZoneFile(zone.name, simulatedRecords, { ...zone, soa_serial: dryRunSerial });
+      bindService.validateZoneContent(zone.name, dryRunContent);
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'Zone 文件验证失败：' + err.message });
+  }
+
   try {
     const result = run(
       'INSERT INTO records (zone_id, name, type, value, ttl, priority, weight, port) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [zone.id, name, type, value, ttl || 3600, priority || null, weight || null, port || null]
+      [zone.id, name, type, value, ttl ?? 3600, priority ?? null, weight ?? null, port ?? null]
     );
 
     regenerateAndReload(zone);
@@ -204,11 +224,22 @@ router.put('/:name/records/:id', requireRole('super_admin', 'ops_admin'), (req, 
     return res.status(400).json({ errors: zoneValidation.errors.map(msg => ({ msg })) });
   }
 
+  // Validate zone file before DB update (dry-run against temp file)
+  try {
+    if (zone.type === 'master') {
+      const dryRunSerial = generateSerial(zone.soa_serial);
+      const dryRunContent = generateZoneFile(zone.name, simulatedRecords, { ...zone, soa_serial: dryRunSerial });
+      bindService.validateZoneContent(zone.name, dryRunContent);
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'Zone 文件验证失败：' + err.message });
+  }
+
   try {
     const oldDetail = `${record.type} ${record.value}`;
     run(
       'UPDATE records SET name = ?, type = ?, value = ?, ttl = ?, priority = ?, weight = ?, port = ? WHERE id = ?',
-      [name, type, value, ttl || 3600, priority || null, weight || null, port || null, req.params.id]
+      [name, type, value, ttl ?? 3600, priority ?? null, weight ?? null, port ?? null, req.params.id]
     );
 
     regenerateAndReload(zone);
@@ -248,6 +279,17 @@ router.delete('/:name/records/:id', requireRole('super_admin', 'ops_admin'), (re
   const zoneValidation = validateZoneRecords(simulatedRecords, zone.name);
   if (zoneValidation.errors.length > 0) {
     return res.status(400).json({ errors: zoneValidation.errors.map(msg => ({ msg })) });
+  }
+
+  // Validate zone file before DB delete (dry-run against temp file)
+  try {
+    if (zone.type === 'master') {
+      const dryRunSerial = generateSerial(zone.soa_serial);
+      const dryRunContent = generateZoneFile(zone.name, simulatedRecords, { ...zone, soa_serial: dryRunSerial });
+      bindService.validateZoneContent(zone.name, dryRunContent);
+    }
+  } catch (err) {
+    return res.status(500).json({ error: 'Zone 文件验证失败：' + err.message });
   }
 
   try {

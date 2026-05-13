@@ -71,6 +71,14 @@ router.get('/', (req, res) => {
   });
 });
 
+// Sanitize a CSV cell value to prevent formula injection (Excel)
+function sanitizeCSVCell(val) {
+  if (typeof val === 'string' && /^[=+\-@\t\r]/.test(val)) {
+    return "'" + val;
+  }
+  return val;
+}
+
 // GET /api/audit/export — export audit logs as CSV or JSON
 router.get('/export', (req, res) => {
   const conditions = [];
@@ -94,7 +102,17 @@ router.get('/export', (req, res) => {
   const format = req.query.format || 'csv';
 
   if (format === 'csv') {
-    const csv = csvStringify(logs, {
+    const sanitized = logs.map(r => ({
+      id: r.id,
+      username: sanitizeCSVCell(r.username),
+      action: sanitizeCSVCell(r.action),
+      target: sanitizeCSVCell(r.target),
+      detail: sanitizeCSVCell(r.detail),
+      ip: sanitizeCSVCell(r.ip),
+      status: r.status,
+      created_at: r.created_at,
+    }));
+    const csv = csvStringify(sanitized, {
       header: true,
       columns: ['id', 'username', 'action', 'target', 'detail', 'ip', 'status', 'created_at'],
     });

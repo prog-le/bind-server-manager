@@ -25,14 +25,14 @@ function isValidHostname(name) {
 // Validate record name field
 // Accepts: @, hostname labels, *, *.subdomain
 // Rejects: www.*, **, *., empty, .leading-dot
-const RECORD_NAME_REGEX = /^(@|\*$|\*\.[a-zA-Z0-9][a-zA-Z0-9.-]*|[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*)$/;
+const RECORD_NAME_REGEX = /^(@|\*$|\*\.[a-zA-Z0-9_][a-zA-Z0-9_.-]*|[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?)*)$/;
 
 function validateRecordName(name) {
   if (!name || typeof name !== 'string') return '请输入记录名称';
   name = name.trim();
   if (name === '') return '请输入记录名称';
   if (!RECORD_NAME_REGEX.test(name)) {
-    return '记录名称格式无效。请使用 @（根域名）、主机名、*（泛域名）或 *.子域名';
+    return '记录名称格式无效。请使用 @（根域名）、主机名、*（泛域名）或 *.子域名（SRV 记录允许下划线前缀）';
   }
   return null; // valid
 }

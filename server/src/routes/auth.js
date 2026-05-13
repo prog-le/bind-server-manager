@@ -7,45 +7,61 @@ const { config } = require('../config');
 const authMiddleware = require('../middleware/auth');
 const { requireRole } = require('../middleware/auth');
 const { addLog, getClientIp } = require('../utils/logger');
+const { query, queryOne, run } = require('../db');
 
 const router = express.Router();
 
-// Login failure tracking (in-memory, per IP)
-const loginFailures = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_DURATION = 15 * 60 * 1000; // 15 minutes
+const LOCKOUT_DURATION_MINUTES = 15;
 
 function getLoginFailures(ip) {
-  const entry = loginFailures.get(ip);
-  if (!entry) return { count: 0, lockedUntil: 0 };
-  if (entry.lockedUntil && Date.now() > entry.lockedUntil) {
-    loginFailures.delete(ip);
+  const row = queryOne(
+    'SELECT ip, attempt_count, locked_until FROM login_failures WHERE ip = ?',
+    [ip]
+  );
+  if (!row) return { count: 0, lockedUntil: 0 };
+  if (row.locked_until && new Date(row.locked_until).getTime() < Date.now()) {
+    // Lock expired — clear and return fresh
+    run('DELETE FROM login_failures WHERE ip = ?', [ip]);
     return { count: 0, lockedUntil: 0 };
   }
-  return entry;
+  return {
+    count: row.attempt_count,
+    lockedUntil: row.locked_until ? new Date(row.locked_until).getTime() : 0,
+  };
 }
 
 function recordLoginFailure(ip) {
-  const entry = getLoginFailures(ip);
-  const count = entry.count + 1;
-  const lockedUntil = count >= MAX_LOGIN_ATTEMPTS ? Date.now() + LOCKOUT_DURATION : 0;
-  loginFailures.set(ip, { count, lockedUntil });
-  return { count, lockedUntil };
+  const row = queryOne('SELECT * FROM login_failures WHERE ip = ?', [ip]);
+  if (!row) {
+    run(
+      'INSERT INTO login_failures (ip, attempt_count, first_failed, locked_until, updated_at) VALUES (?, 1, datetime(\'now\'), NULL, datetime(\'now\'))',
+      [ip]
+    );
+    return { count: 1, lockedUntil: 0 };
+  }
+  const newCount = row.attempt_count + 1;
+  const lockedUntil = newCount >= MAX_LOGIN_ATTEMPTS
+    ? new Date(Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000).toISOString()
+    : null;
+  run(
+    'UPDATE login_failures SET attempt_count = ?, locked_until = ?, updated_at = datetime(\'now\') WHERE ip = ?',
+    [newCount, lockedUntil, ip]
+  );
+  return {
+    count: newCount,
+    lockedUntil: lockedUntil ? new Date(lockedUntil).getTime() : 0,
+  };
 }
 
 function clearLoginFailures(ip) {
-  loginFailures.delete(ip);
+  run('DELETE FROM login_failures WHERE ip = ?', [ip]);
 }
 
-// Clean up expired entries every 5 minutes
+// Clean up expired entries every 30 minutes
 setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of loginFailures.entries()) {
-    if (entry.lockedUntil && now > entry.lockedUntil) {
-      loginFailures.delete(ip);
-    }
-  }
-}, 5 * 60 * 1000);
+  run("DELETE FROM login_failures WHERE locked_until IS NOT NULL AND locked_until < datetime('now')");
+}, 30 * 60 * 1000);
 
 // POST /api/auth/register — first user becomes super_admin
 router.post('/register', [

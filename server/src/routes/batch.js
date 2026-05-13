@@ -25,11 +25,23 @@ function getZoneOrFail(name) {
 }
 
 function normalizeRecord(rec) {
-  // Convert numeric fields from strings (CSV) to integers
-  if (rec.ttl !== undefined && rec.ttl !== null && rec.ttl !== '') rec.ttl = parseInt(rec.ttl, 10) || undefined;
-  if (rec.priority !== undefined && rec.priority !== null && rec.priority !== '') rec.priority = parseInt(rec.priority, 10) || 0;
-  if (rec.weight !== undefined && rec.weight !== null && rec.weight !== '') rec.weight = parseInt(rec.weight, 10) || 0;
-  if (rec.port !== undefined && rec.port !== null && rec.port !== '') rec.port = parseInt(rec.port, 10) || 0;
+  // Convert numeric fields from strings (CSV) to integers; preserve 0 as valid
+  if (rec.ttl !== undefined && rec.ttl !== null && rec.ttl !== '') {
+    rec.ttl = parseInt(rec.ttl, 10);
+    if (isNaN(rec.ttl)) rec.ttl = undefined;
+  }
+  if (rec.priority !== undefined && rec.priority !== null && rec.priority !== '') {
+    rec.priority = parseInt(rec.priority, 10);
+    if (isNaN(rec.priority)) rec.priority = 0;
+  }
+  if (rec.weight !== undefined && rec.weight !== null && rec.weight !== '') {
+    rec.weight = parseInt(rec.weight, 10);
+    if (isNaN(rec.weight)) rec.weight = 0;
+  }
+  if (rec.port !== undefined && rec.port !== null && rec.port !== '') {
+    rec.port = parseInt(rec.port, 10);
+    if (isNaN(rec.port)) rec.port = 0;
+  }
   return rec;
 }
 
@@ -104,15 +116,20 @@ router.post('/:name/records/batch', (req, res) => {
     return res.status(400).json({ error: '部分记录校验失败', details: results.errors });
   }
 
-  // Insert all valid records
+  // Insert all valid records in a transaction
   try {
+    run('BEGIN');
+
     for (const rec of records) {
+      const nrec = normalizeRecord({ ...rec });
       const result = run(
         'INSERT INTO records (zone_id, name, type, value, ttl, priority, weight, port) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [zone.id, rec.name, rec.type, rec.value, rec.ttl || 3600, rec.priority || null, rec.weight || null, rec.port || null]
+        [zone.id, nrec.name, nrec.type, nrec.value, nrec.ttl ?? 3600, nrec.priority ?? null, nrec.weight ?? null, nrec.port ?? null]
       );
-      results.created.push({ id: result.lastInsertRowid, name: rec.name, type: rec.type });
+      results.created.push({ id: result.lastInsertRowid, name: nrec.name, type: nrec.type });
     }
+
+    run('COMMIT');
 
     // Single regenerate + reload for all records
     regenerateAndReload(zone);
@@ -129,6 +146,7 @@ router.post('/:name/records/batch', (req, res) => {
       created: results.created,
     });
   } catch (err) {
+    try { run('ROLLBACK'); } catch (_) {}
     addLog({
       userId: req.user.id, username: req.user.username,
       action: 'batch_create_records', target: req.params.name,
@@ -177,11 +195,18 @@ router.put('/:name/records/batch', (req, res) => {
         continue;
       }
 
+      run('BEGIN');
       run(
         'UPDATE records SET name = ?, type = ?, value = ?, ttl = ?, priority = ?, weight = ?, port = ? WHERE id = ?',
-        [rec.name, rec.type, rec.value, rec.ttl || 3600, rec.priority || null, rec.weight || null, rec.port || null, rec.id]
+        [rec.name, rec.type, rec.value, rec.ttl ?? 3600, rec.priority ?? null, rec.weight ?? null, rec.port ?? null, rec.id]
       );
       results.updated.push({ id: rec.id, name: rec.name, type: rec.type });
+    }
+
+    if (results.errors.length > 0) {
+      run('ROLLBACK');
+    } else {
+      run('COMMIT');
     }
 
     if (results.updated.length > 0) {
@@ -201,6 +226,7 @@ router.put('/:name/records/batch', (req, res) => {
       errors: results.errors.length > 0 ? results.errors : undefined,
     });
   } catch (err) {
+    try { run('ROLLBACK'); } catch (_) {}
     addLog({
       userId: req.user.id, username: req.user.username,
       action: 'batch_update_records', target: req.params.name,
@@ -227,11 +253,13 @@ router.delete('/:name/records/batch', (req, res) => {
   }
 
   try {
+    run('BEGIN');
     let deleted = 0;
     for (const id of ids) {
       const result = run('DELETE FROM records WHERE id = ? AND zone_id = ?', [id, zone.id]);
       deleted += result.changes;
     }
+    run('COMMIT');
 
     if (deleted > 0) {
       regenerateAndReload(zone);
@@ -246,6 +274,7 @@ router.delete('/:name/records/batch', (req, res) => {
 
     res.json({ message: `成功删除 ${deleted} 条记录`, deleted });
   } catch (err) {
+    try { run('ROLLBACK'); } catch (_) {}
     addLog({
       userId: req.user.id, username: req.user.username,
       action: 'batch_delete_records', target: req.params.name,
@@ -304,16 +333,19 @@ router.post('/:name/records/import', (req, res) => {
     return res.status(400).json({ error: '部分记录校验失败', details: validationErrors });
   }
 
-  // Import records
+  // Import records in a transaction
   try {
+    run('BEGIN');
     const created = [];
     for (const rec of records) {
+      const nrec = normalizeRecord({ ...rec });
       const result = run(
         'INSERT INTO records (zone_id, name, type, value, ttl, priority, weight, port) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        [zone.id, rec.name, rec.type, rec.value, rec.ttl || 3600, rec.priority || null, rec.weight || null, rec.port || null]
+        [zone.id, nrec.name, nrec.type, nrec.value, nrec.ttl ?? 3600, nrec.priority ?? null, nrec.weight ?? null, nrec.port ?? null]
       );
-      created.push({ id: result.lastInsertRowid, name: rec.name, type: rec.type });
+      created.push({ id: result.lastInsertRowid, name: nrec.name, type: nrec.type });
     }
+    run('COMMIT');
 
     regenerateAndReload(zone);
 
@@ -329,6 +361,7 @@ router.post('/:name/records/import', (req, res) => {
       created,
     });
   } catch (err) {
+    try { run('ROLLBACK'); } catch (_) {}
     addLog({
       userId: req.user.id, username: req.user.username,
       action: 'import_records', target: req.params.name,
@@ -339,6 +372,14 @@ router.post('/:name/records/import', (req, res) => {
 });
 
 // ─── Export Records (CSV/JSON) ──────────────────────────────────
+
+// Sanitize a CSV cell value to prevent formula injection (Excel)
+function sanitizeCSVCell(val) {
+  if (typeof val === 'string' && /^[=+\-@\t\r]/.test(val)) {
+    return "'" + val;
+  }
+  return val;
+}
 
 // GET /api/zones/:name/records/export?format=csv|json
 router.get('/:name/records/export', (req, res) => {
@@ -356,7 +397,16 @@ router.get('/:name/records/export', (req, res) => {
   });
 
   if (format === 'csv') {
-    const csv = csvStringify(records, {
+    const sanitized = records.map(r => ({
+      name: sanitizeCSVCell(r.name),
+      type: r.type,
+      value: sanitizeCSVCell(r.value),
+      ttl: r.ttl,
+      priority: r.priority,
+      weight: r.weight,
+      port: r.port,
+    }));
+    const csv = csvStringify(sanitized, {
       header: true,
       columns: ['name', 'type', 'value', 'ttl', 'priority', 'weight', 'port'],
     });

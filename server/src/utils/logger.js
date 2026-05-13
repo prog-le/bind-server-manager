@@ -15,7 +15,9 @@ function addLog({ userId = null, username = null, action, target = null, detail 
 }
 
 function getClientIp(req) {
-  return req.headers['x-forwarded-for'] || req.socket?.remoteAddress || req.ip || null;
+  // Only trust X-Forwarded-For when behind a known proxy
+  // For direct connections (dev, production without proxy), use socket remoteAddress
+  return req.socket?.remoteAddress || req.ip || req.headers['x-forwarded-for'] || null;
 }
 
 module.exports = { addLog, getClientIp };

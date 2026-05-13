@@ -155,8 +155,7 @@ router.delete('/:name', requireRole('super_admin', 'ops_admin'), (req, res) => {
       bindService.deleteZoneFile(zone.file_path);
     }
 
-    // Delete from database (records cascade)
-    run('DELETE FROM records WHERE zone_id = ?', [zone.id]);
+    // Delete from database (records cascade via ON DELETE CASCADE)
     run('DELETE FROM zones WHERE id = ?', [zone.id]);
 
     addLog({ userId: req.user.id, username: req.user.username, action: 'delete_zone', target: zone.name, detail: `type=${zone.type}`, ip: getClientIp(req) });
